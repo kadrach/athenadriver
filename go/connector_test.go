@@ -22,10 +22,15 @@ package athenadriver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/athena"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/uber-go/tally/v4"
 	"go.uber.org/zap"
@@ -161,4 +166,35 @@ func TestSQLConnector_Driver(t *testing.T) {
 		tracer: NewDefaultObservability(testConf),
 	}
 	assert.NotNil(t, connector.Driver())
+}
+
+func TestSQLConnector_Connect_UserAgent(t *testing.T) {
+	testConf := NewNoOpsConfig()
+	connector := &SQLConnector{
+		config: testConf,
+		tracer: NewDefaultObservability(testConf),
+	}
+
+	conn, err := connector.Connect(context.Background())
+	assert.Nil(t, err)
+	client := conn.(*Connection).athenaClient.(*athena.Client)
+
+	// Capture the built request's User-Agent header and abort before it is sent.
+	var userAgent string
+	capture := middleware.FinalizeMiddlewareFunc("CaptureUserAgent",
+		func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
+			middleware.FinalizeOutput, middleware.Metadata, error) {
+			userAgent = in.Request.(*smithyhttp.Request).Header.Get("User-Agent")
+			return middleware.FinalizeOutput{}, middleware.Metadata{}, errors.New("stop")
+		})
+	_, err = client.GetQueryExecution(context.Background(),
+		&athena.GetQueryExecutionInput{QueryExecutionId: aws.String("qid")},
+		func(o *athena.Options) {
+			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+				return stack.Finalize.Add(capture, middleware.Before)
+			})
+		})
+	assert.NotNil(t, err)
+	assert.Contains(t, userAgent, "aws-sdk-go-v2/")
+	assert.Contains(t, userAgent, " athenadriver/"+DriverVersion)
 }

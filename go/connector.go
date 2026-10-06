@@ -31,6 +31,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
@@ -107,7 +108,9 @@ func (c *SQLConnector) Connect(ctx context.Context) (driver.Conn, error) {
 		}
 	}
 
-	athenaClient := athena.NewFromConfig(awsCfg)
+	athenaClient := athena.NewFromConfig(awsCfg, func(o *athena.Options) {
+		o.APIOptions = append(o.APIOptions, awsmiddleware.AddUserAgentKeyValue("athenadriver", DriverVersion))
+	})
 	timeConnect := time.Since(now)
 	conn := &Connection{
 		athenaClient: athenaClient,
